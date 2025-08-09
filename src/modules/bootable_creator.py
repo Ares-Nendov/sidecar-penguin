@@ -209,6 +209,9 @@ class BootableCreator:
         """
         logger.info(f"Preparing drive on Linux: {device_path}")
         
+        # Unmount all partitions on the device before proceeding
+        self._unmount_all_partitions(device_path)
+        
         # Implementation for Linux
         # This is a placeholder - in a real implementation, we would use parted and mkfs
         if progress_callback:
@@ -287,13 +290,62 @@ class BootableCreator:
             progress_callback: Optional callback function for progress updates
         """
         logger.info(f"Writing ISO on Linux: {iso_path} to {device_path}")
-        
-        # Implementation for Linux
-        # This is a placeholder - in a real implementation, we would use dd
-        if progress_callback:
-            progress_callback(40, "Writing ISO on Linux...")
-        
-        logger.info("ISO writing completed on Linux")
+
+        if not shutil.which("pkexec"):
+            raise EnvironmentError("pkexec is not installed. Please install it to continue.")
+
+        if not shutil.which("dd"):
+            raise EnvironmentError("dd is not installed. Please install it to continue.")
+
+        command = [
+            "pkexec",
+            "dd",
+            f"if={iso_path}",
+            f"of={device_path}",
+            "bs=4M",
+            "status=progress",
+            "oflag=sync"
+        ]
+
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+
+            # Monitor stderr for progress
+            if process.stderr:
+                for line in iter(process.stderr.readline, ''):
+                    if "copied" in line:
+                        # Extract percentage from dd's progress output if possible
+                        # This is complex as dd's output is not standardized
+                        # For now, we'll just log the line
+                        logger.info(line.strip())
+                        if progress_callback:
+                            # A more sophisticated progress parsing could be implemented here
+                            progress_callback(50, "Writing ISO...")
+                    else:
+                        logger.info(line.strip())
+
+            process.wait()
+
+            if process.returncode != 0:
+                stderr_output = process.stderr.read() if process.stderr else ""
+                raise RuntimeError(f"Failed to write ISO to drive: {stderr_output}")
+
+            logger.info("ISO writing completed on Linux")
+            if progress_callback:
+                progress_callback(70, "ISO written successfully")
+
+        except FileNotFoundError:
+            raise RuntimeError("dd command not found. Please ensure it is installed and in your PATH.")
+        except Exception as e:
+            logger.error(f"An error occurred while writing the ISO: {e}")
+            raise
     
     def _setup_persistence(self, device_path: str, persistence_size: int,
                           progress_callback: Optional[Callable[[int, str], None]] = None) -> None:
